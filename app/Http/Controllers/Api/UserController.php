@@ -15,12 +15,14 @@ class UserController extends Controller
      */
     public function index(Request $request)
     {
-        // Only admin can list users, or maybe everyone to select recipient?
-        // For now let's allow everyone but maybe filter in frontend
-        // Or strictly check role here
-        // if ($request->user()->role !== 'admin') { return response()->json(['message' => 'Forbidden'], 403); }
-        
-        return User::all();
+        // Admins get the full directory. Everyone else only needs a minimal
+        // list to pick disposition recipients, so do not leak emails /
+        // phone numbers of all users to every authenticated account.
+        if ($request->user()->role === 'admin') {
+            return User::all();
+        }
+
+        return User::select('id', 'name', 'role')->get();
     }
 
     /**
@@ -36,7 +38,7 @@ class UserController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'password' => 'required|string|min:6',
-            'role' => 'required|string',
+            'role' => ['required', Rule::in(User::ROLES)],
             'phone_number' => 'nullable|string',
         ]);
 
@@ -68,7 +70,7 @@ class UserController extends Controller
             'name' => 'sometimes|string|max:255',
             'email' => ['sometimes', 'email', Rule::unique('users')->ignore($user->id)],
             'password' => 'sometimes|string|min:6',
-            'role' => 'sometimes|string',
+            'role' => ['sometimes', Rule::in(User::ROLES)],
             'phone_number' => 'nullable|string',
         ]);
 

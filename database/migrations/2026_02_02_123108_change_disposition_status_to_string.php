@@ -22,10 +22,10 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('dispositions', function (Blueprint $table) {
-            // Reverting to enum is tricky in some DBs without recreating, 
-            // but for now we can leave it as string or try to revert if strictly needed.
-            // Leaving as string is safer for down migration to avoid data loss if new statuses were added.
-            // $table->enum('status', ['pending', 'read', 'completed'])->default('pending')->change();
+            // Restore the original enum definition from the create migration.
+            $table->enum('status', ['pending', 'read', 'accepted', 'completed'])
+                ->default('pending')
+                ->change();
         });
     }
 };

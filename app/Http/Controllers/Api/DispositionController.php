@@ -52,10 +52,31 @@ class DispositionController extends Controller
         $validated = $request->validate([
             'letter_id' => 'required|exists:letters,id',
             'to_user_ids' => 'required|array', // Allow multiple recipients
-            'to_user_ids.*' => 'exists:users,id',
+            'to_user_ids.*' => 'distinct|exists:users,id',
             'type' => 'required|in:forward,disposition,lower',
             'note' => 'nullable|string',
         ]);
+
+        $user = $request->user();
+
+        // Only the admin (who registers letters) or a user who currently
+        // holds the letter (it was disposed to them) may pass it on.
+        $holdsLetter = Disposition::where('letter_id', $validated['letter_id'])
+            ->where('to_user_id', $user->id)
+            ->exists();
+
+        if ($user->role !== 'admin' && ! $holdsLetter) {
+            return response()->json([
+                'message' => 'You can only disposition a letter that was disposed to you.',
+            ], 403);
+        }
+
+        // A user cannot disposition a letter to themselves.
+        if (in_array($user->id, $validated['to_user_ids'])) {
+            return response()->json([
+                'message' => 'You cannot disposition a letter to yourself.',
+            ], 422);
+        }
 
         $dispositions = [];
 
@@ -75,7 +96,7 @@ class DispositionController extends Controller
             if ($recipient && $recipient->phone_number) {
                 $letter = Letter::find($validated['letter_id']);
                 $sender = $request->user();
-                
+
                 $typeMap = [
                     'important' => 'Penting',
                     'ordinary' => 'Biasa',
@@ -96,10 +117,10 @@ class DispositionController extends Controller
                 $message .= "Sifat         : {$type} / {$classification}\n";
                 $message .= "Perihal       : {$letter->subject}\n\n";
                 $message .= "*CATATAN DISPOSISI*\n";
-                $message .= ($validated['note'] ?? '-') . "\n\n";
+                $message .= ($validated['note'] ?? '-')."\n\n";
                 $message .= "Mohon untuk segera menindaklanjuti surat tersebut melalui aplikasi pada tautan berikut:\n";
-                $message .= env('FRONTEND_URL', 'http://localhost:3000') . "/incoming/{$disposition->id}\n\n";
-                $message .= "Terima kasih.";
+                $message .= config('services.frontend.url')."/incoming/{$disposition->id}\n\n";
+                $message .= 'Terima kasih.';
 
                 $this->whatsappService->sendNotification($recipient->phone_number, $message);
             }
@@ -130,9 +151,17 @@ class DispositionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $disposition->update([
-            'status' => 'accepted',
-        ]);
+        if (in_array($disposition->status, ['accepted', 'completed'])) {
+            return $disposition; // already accepted, idempotent
+        }
+
+        // State machine: must be read before it can be accepted. If it is
+        // still pending, mark it read first so the flow stays consistent.
+        if ($disposition->status === 'pending') {
+            $disposition->update(['status' => 'read', 'read_at' => now()]);
+        }
+
+        $disposition->update(['status' => 'accepted']);
 
         return $disposition;
     }

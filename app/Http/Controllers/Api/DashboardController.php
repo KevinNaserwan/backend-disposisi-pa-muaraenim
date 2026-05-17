@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Letter;
 use App\Models\Disposition;
+use App\Models\Letter;
 use App\Models\User;
 use Illuminate\Http\Request;
 
@@ -22,7 +22,7 @@ class DashboardController extends Controller
                     'archived_letters' => Letter::where('status', 'archived')->count(),
                     'total_users' => User::count(),
                 ],
-                'recent_letters' => Letter::latest()->take(5)->get()
+                'recent_letters' => Letter::latest()->take(5)->get(),
             ]);
         } else {
             return response()->json([
@@ -35,7 +35,7 @@ class DashboardController extends Controller
                     ->with('letter', 'sender')
                     ->latest()
                     ->take(5)
-                    ->get()
+                    ->get(),
             ]);
         }
     }

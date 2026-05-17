@@ -7,6 +7,9 @@ use App\Models\Letter;
 use App\Models\User;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class LetterController extends Controller
 {
@@ -30,7 +33,7 @@ class LetterController extends Controller
         } else {
             // Default to incoming if not specified, or just show all?
             // Usually we want to separate them.
-             $query->where('category', 'incoming');
+            $query->where('category', 'incoming');
         }
 
         return $query->get();
@@ -58,8 +61,6 @@ class LetterController extends Controller
             'category' => 'nullable|in:incoming,outgoing',
         ]);
 
-        // Auto generate agenda number (simple timestamp or count for now)
-        $validated['agenda_number'] = 'AGN-' . time(); 
         $validated['status'] = 'processing';
         $validated['category'] = $validated['category'] ?? 'incoming';
 
@@ -68,7 +69,17 @@ class LetterController extends Controller
             $validated['file_path'] = $path;
         }
 
-        $letter = Letter::create($validated);
+        // Generate a collision-free agenda number from the row id (unique by PK)
+        // instead of time(), which clashes when 2 letters are created in the
+        // same second.
+        $letter = DB::transaction(function () use ($validated) {
+            $letter = Letter::create($validated + ['agenda_number' => 'AGN-TMP-'.Str::uuid()]);
+            $letter->update([
+                'agenda_number' => 'AGN-'.now()->format('Y').'-'.str_pad((string) $letter->id, 5, '0', STR_PAD_LEFT),
+            ]);
+
+            return $letter;
+        });
 
         return response()->json($letter, 201);
     }
@@ -99,13 +110,19 @@ class LetterController extends Controller
             'classification' => 'sometimes|in:secret,ordinary',
             'subject' => 'sometimes|string',
             'status' => 'sometimes|string',
+            'file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
         ]);
 
         if ($request->hasFile('file')) {
+            // Remove the old file so it is not orphaned in storage.
+            if ($letter->file_path) {
+                Storage::disk('public')->delete($letter->file_path);
+            }
             $path = $request->file('file')->store('letters', 'public');
             $validated['file_path'] = $path;
         }
 
+        unset($validated['file']);
         $letter->update($validated);
 
         return $letter;
@@ -118,6 +135,11 @@ class LetterController extends Controller
     {
         if ($request->user()->role !== 'admin') {
             return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        // Delete the stored file too, otherwise it is orphaned in storage.
+        if ($letter->file_path) {
+            Storage::disk('public')->delete($letter->file_path);
         }
 
         $letter->delete();
@@ -136,8 +158,8 @@ class LetterController extends Controller
         }]);
 
         // Determine current holder
-        // The last disposition's receiver is likely the current holder, 
-        // unless it's a loop or parallel. 
+        // The last disposition's receiver is likely the current holder,
+        // unless it's a loop or parallel.
         // For simple tracking, the last disposition is key.
         $lastDisposition = $letter->dispositions->last();
         $currentHolder = $lastDisposition ? $lastDisposition->receiver : null;
@@ -145,7 +167,7 @@ class LetterController extends Controller
         return response()->json([
             'letter' => $letter,
             'current_holder' => $currentHolder,
-            'history' => $letter->dispositions
+            'history' => $letter->dispositions,
         ]);
     }
 
@@ -160,7 +182,7 @@ class LetterController extends Controller
 
         $validated = $request->validate([
             'from_user_id' => 'required|exists:users,id',
-            'to_user_id' => 'required|exists:users,id',
+            'to_user_id' => 'required|exists:users,id|different:from_user_id',
             'note' => 'nullable|string',
         ]);
 
@@ -169,7 +191,7 @@ class LetterController extends Controller
             'from_user_id' => $validated['from_user_id'],
             'to_user_id' => $validated['to_user_id'],
             'type' => 'disposition', // or 'forward' / 'escalation'
-            'note' => $validated['note'] . ' (Escalated by Admin)',
+            'note' => trim(($validated['note'] ?? '').' (Escalated by Admin)'),
             'status' => 'pending',
         ]);
 
@@ -177,7 +199,7 @@ class LetterController extends Controller
         $recipient = User::find($validated['to_user_id']);
         if ($recipient && $recipient->phone_number) {
             $sender = User::find($validated['from_user_id']);
-            
+
             $typeMap = [
                 'important' => 'Penting',
                 'ordinary' => 'Biasa',
@@ -198,10 +220,10 @@ class LetterController extends Controller
             $message .= "Sifat         : {$type} / {$classification}\n";
             $message .= "Perihal       : {$letter->subject}\n\n";
             $message .= "*CATATAN DISPOSISI*\n";
-            $message .= ($validated['note'] ?? '-') . "\n\n";
+            $message .= ($validated['note'] ?? '-')."\n\n";
             $message .= "Mohon untuk segera menindaklanjuti surat tersebut melalui aplikasi pada tautan berikut:\n";
-            $message .= env('FRONTEND_URL', 'http://localhost:3000') . "/incoming/{$disposition->id}\n\n";
-            $message .= "Terima kasih.";
+            $message .= config('services.frontend.url')."/incoming/{$disposition->id}\n\n";
+            $message .= 'Terima kasih.';
 
             $this->whatsappService->sendNotification($recipient->phone_number, $message);
         }

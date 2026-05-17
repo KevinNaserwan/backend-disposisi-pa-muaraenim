@@ -11,7 +11,31 @@ use Laravel\Sanctum\HasApiTokens;
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable, HasApiTokens;
+    use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * Allowed roles in the system. Used to validate role input so
+     * arbitrary/privileged roles cannot be injected.
+     *
+     * @var list<string>
+     */
+    public const ROLES = [
+        'admin',
+        'admin_arsip',
+        'kasubbag_umum',
+        'kasubbag_kepegawaian',
+        'kasubbag_ptip',
+        'sekretaris',
+        'plh_sekretaris',
+        'panitera',
+        'panmud_hukum',
+        'panmud_permohonan',
+        'panmud_gugatan',
+        'wakil_ketua',
+        'ketua',
+        'plh_ketua',
+        'pegawai',
+    ];
 
     /**
      * The attributes that are mass assignable.
